@@ -1,108 +1,62 @@
 import torch
 import torch.nn as nn
+import torchvision.transforms.functional as TF
 
-""" segmentation model example
-"""
+class DoubleConv(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(DoubleConv, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x):
+        return self.conv(x)
 
 class Model(nn.Module):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, in_channels=3, out_channels=60, features=[64, 128, 256, 512],):
+        super(Model, self).__init__()
 
-        """ Encoder """
-        self.e1 = encoder_block(3, 64)
-        self.e2 = encoder_block(64, 128)
-        self.e3 = encoder_block(128, 256)
-        self.e4 = encoder_block(256, 512)
+        self.ups = nn.ModuleList()
+        self.downs = nn.ModuleList()
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        """ Bottleneck """
-        self.b = conv_block(512, 1024)
+        # Down part of UNET
+        for feature in features:
+            self.downs.append(DoubleConv(in_channels, feature))
+            in_channels = feature
 
-        """ Decoder """
-        self.d1 = decoder_block(1024, 512)
-        self.d2 = decoder_block(512, 256)
-        self.d3 = decoder_block(256, 128)
-        self.d4 = decoder_block(128, 64)
+        # Up part of UNET
+        for feature in reversed(features):
+            self.ups.append(nn.ConvTranspose2d(feature*2, feature, kernel_size=2, stride=2, padding=0))
+            self.ups.append(DoubleConv(feature*2, feature))
 
-        """ Classifier """
-        self.outputs = nn.Conv2d(64, 34, kernel_size=1, padding=0)
+        self.bottleneck = DoubleConv(features[-1], features[-1]*2)
+        self.final_conv = nn.Conv2d(features[0], out_channels, kernel_size=1)
 
-    def forward(self, inputs):
-        """ Encoder """
-        s1, p1 = self.e1(inputs)
-        s2, p2 = self.e2(p1)
-        s3, p3 = self.e3(p2)
-        s4, p4 = self.e4(p3)
+    def forward(self, x):
+        skip_connections = []
 
-        """ Bottleneck """
-        b = self.b(p4)
+        for down in self.downs:
+            x = down(x)
+            skip_connections.append(x)
+            x = self.pool(x)
 
-        """ Decoder """
-        d1 = self.d1(b, s4)
-        d2 = self.d2(d1, s3)
-        d3 = self.d3(d2, s2)
-        d4 = self.d4(d3, s1)
+        x = self.bottleneck(x)
+        skip_connections = skip_connections[::-1]
 
-        """ Segmentation output """
-        outputs = self.outputs(d4)
+        for idx in range(0, len(self.ups), 2):
+            x = self.ups[idx](x)
+            skip_connection = skip_connections[idx//2]
 
-        return outputs
+            if x.shape != skip_connection.shape:
+                x = TF.resize(x, size=skip_connection.shape[2:])
 
+            concat_skip = torch.cat((skip_connection, x), dim=1)
+            x = self.ups[idx+1](concat_skip)
 
-class conv_block(nn.Module):
-    def __init__(self, in_c, out_c):
-        super().__init__()
-
-        self.conv1 = nn.Conv2d(in_c, out_c, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(out_c)
-
-        self.conv2 = nn.Conv2d(out_c, out_c, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(out_c)
-
-        self.relu = nn.ReLU()
-
-    def forward(self, inputs):
-        x = self.conv1(inputs)
-        x = self.bn1(x)
-        x = self.relu(x)
-
-        x = self.conv2(x)
-        x = self.bn2(x)
-        x = self.relu(x)
-
-        return x
-
-""" Encoder block:
-    It consists of an conv_block followed by a max pooling.
-    Here the number of filters doubles and the height and width half after every block.
-"""
-class encoder_block(nn.Module):
-    def __init__(self, in_c, out_c):
-        super().__init__()
-
-        self.conv = conv_block(in_c, out_c)
-        self.pool = nn.MaxPool2d((2, 2))
-
-    def forward(self, inputs):
-        x = self.conv(inputs)
-        p = self.pool(x)
-
-        return x, p
-
-""" Decoder block:
-    The decoder block begins with a transpose convolution, followed by a concatenation with the skip
-    connection from the encoder block. Next comes the conv_block.
-    Here the number filters decreases by half and the height and width doubles.
-"""
-class decoder_block(nn.Module):
-    def __init__(self, in_c, out_c):
-        super().__init__()
-
-        self.up = nn.ConvTranspose2d(in_c, out_c, kernel_size=2, stride=2, padding=0)
-        self.conv = conv_block(out_c+out_c, out_c)
-
-    def forward(self, inputs, skip):
-        x = self.up(inputs)
-        x = torch.cat([x, skip], axis=1)
-        x = self.conv(x)
-
-        return x
+        return self.final_conv(x)
