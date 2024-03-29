@@ -18,14 +18,14 @@ import utils
 IMAGE_HEIGHT = 256  # 1024 originally
 IMAGE_WIDTH = 512  # 2048 originally
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-NUM_EPOCHS = 100
+NUM_EPOCHS = 200
 BATCH_SIZE = 16
 LEARNING_RATE = 0.001
 
 IGNORE_INDEX=255
 VOID_CLASSES = [0, 1, 2, 3, 4, 5, 6, 9, 10, 14, 15, 16, 18, 29, 30, -1]
 VALID_CLASSES = [7, 8, 11, 12, 13, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 31, 32, 33,255]
-NUM_CLASSES=60
+NUM_CLASSES=19
 
 def get_arg_parser():
     parser = ArgumentParser()
@@ -84,7 +84,8 @@ def validation_step(model, data_loader, loss_fn, device):
 
 def main(args):
     """define your model, trainingsloop optimitzer etc. here"""
-    
+    best_jaccard_index = 0  
+
     # start a new wandb run to track this script
     wandb.init(
         # set the wandb project where this run will be logged
@@ -108,6 +109,7 @@ def main(args):
     mask_transform = transforms.Compose([
         transforms.Resize((IMAGE_HEIGHT, IMAGE_WIDTH), interpolation=transforms.InterpolationMode.NEAREST),
         transforms.ToTensor()
+    ])
 
     # data loading
     dataset = Cityscapes(args.data_path, split='train', mode='fine', target_type='semantic', transform=transform, target_transform=mask_transform)
@@ -116,8 +118,8 @@ def main(args):
     validation_size = len(dataset) - train_size
 
     train_dataset, validation_dataset = random_split(dataset, [train_size, validation_size])
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=8)
-    validation_loader = DataLoader(validation_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=8)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=10)
+    validation_loader = DataLoader(validation_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=10)
     #dataset[0]     //pair image mask
     #dataset[0][0]  //image  dim [3, 1024, 2048] (channels, height, width) type  torch.Tensor
     #dataset[0][1]  //mask   dim [1, 1024, 2048] (channels, height, width) type  torch.Tensor
@@ -125,7 +127,7 @@ def main(args):
     # visualize example images
 
     # define model
-    model = Model(in_channels=3, out_channels=NUM_CLASSES).to(DEVICE)
+    model = Model(img_ch=3, output_ch=NUM_CLASSES).to(DEVICE)
 
     # define optimizer and loss function (don't forget to ignore class index 255)
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
@@ -136,6 +138,7 @@ def main(args):
         model.train()
 
         train_loss, train_jaccard_score = train_step(model, train_loader, loss_fn, optimizer, DEVICE)
+        wandb.log({'Train Loss': train_loss, 'Train Jaccard': train_jaccard_score})
         print(f"Epoch {epoch+1}/{NUM_EPOCHS}, Train Loss: {train_loss:.4f}, Train Jaccard: {train_jaccard_score:.4f}")
     
         # evaluate on test set
@@ -144,9 +147,12 @@ def main(args):
         wandb.log({'Validation Loss': val_loss, 'Validation Jaccard': val_jaccard_score})
         print(f"Validation {epoch+1}/{NUM_EPOCHS}, Validation Loss: {val_loss:.4f}, Validation Jaccard: {val_jaccard_score:.4f}")
         
-    torch.save(model.state_dict(), 'model.pth')
+        if val_jaccard_score > best_jaccard_index:
+            best_jaccard_index = val_jaccard_score
+            torch.save(model.state_dict(), 'model.pth')
+            print("Best model saved with Jaccard Index:", best_jaccard_index)
 
-    wandb.finish()
+    #wandb.finish()
     
 if __name__ == "__main__":
     
