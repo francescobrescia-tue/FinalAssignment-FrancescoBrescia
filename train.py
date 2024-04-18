@@ -10,7 +10,7 @@ import torchvision.transforms as transforms
 import torch.optim as optim
 from torchmetrics.classification import MulticlassJaccardIndex
 from tqdm import tqdm
-import torch.nn as nn
+from loss import focal_loss
 from torch.utils.data import DataLoader, random_split
 import wandb
 import utils
@@ -18,13 +18,11 @@ import utils
 IMAGE_HEIGHT = 256  # 1024 originally
 IMAGE_WIDTH = 512  # 2048 originally
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-NUM_EPOCHS = 200
+NUM_EPOCHS = 250
 BATCH_SIZE = 16
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.0001
 
 IGNORE_INDEX=255
-VOID_CLASSES = [0, 1, 2, 3, 4, 5, 6, 9, 10, 14, 15, 16, 18, 29, 30, -1]
-VALID_CLASSES = [7, 8, 11, 12, 13, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 31, 32, 33,255]
 NUM_CLASSES=19
 
 def get_arg_parser():
@@ -36,7 +34,7 @@ def get_arg_parser():
 def train_step(model, data_loader, loss_fn, optimizer, device):
     """Train the model for one epoch"""
     train_loss = 0
-    train_jaccard_fn = MulticlassJaccardIndex(num_classes=NUM_CLASSES, ignore_index=255).to(device)
+    train_jaccard_fn = MulticlassJaccardIndex(num_classes=NUM_CLASSES, ignore_index=IGNORE_INDEX).to(device)
     train_jaccard_fn.reset()
     loop = tqdm(data_loader)
 
@@ -65,7 +63,7 @@ def train_step(model, data_loader, loss_fn, optimizer, device):
 def validation_step(model, data_loader, loss_fn, device):
     """Validate the model on a data set"""
     val_loss = 0
-    val_jaccard_fn = MulticlassJaccardIndex(num_classes=NUM_CLASSES, ignore_index=255).to(device)
+    val_jaccard_fn = MulticlassJaccardIndex(num_classes=NUM_CLASSES, ignore_index=IGNORE_INDEX).to(device)
     val_jaccard_fn.reset()
     
     with torch.inference_mode():
@@ -94,13 +92,13 @@ def main(args):
         # track hyperparameters and run metadata
         config={
         "learning_rate": LEARNING_RATE,
-        "architecture": "Transformer",
+        "architecture": "Attenntion_Unet_FocalLoss",
         "dataset": "CityScapes",
         "epochs": NUM_EPOCHS,
         }
     )
 
-    transform = transforms.Compose([
+    transform = transforms.Compose([        
         transforms.Resize([IMAGE_HEIGHT, IMAGE_WIDTH]),
         transforms.ToTensor(), 
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -114,7 +112,7 @@ def main(args):
     # data loading
     dataset = Cityscapes(args.data_path, split='train', mode='fine', target_type='semantic', transform=transform, target_transform=mask_transform)
 
-    train_size = int(0.8 * len(dataset))
+    train_size = int(0.9 * len(dataset))
     validation_size = len(dataset) - train_size
 
     train_dataset, validation_dataset = random_split(dataset, [train_size, validation_size])
@@ -123,16 +121,14 @@ def main(args):
     #dataset[0]     //pair image mask
     #dataset[0][0]  //image  dim [3, 1024, 2048] (channels, height, width) type  torch.Tensor
     #dataset[0][1]  //mask   dim [1, 1024, 2048] (channels, height, width) type  torch.Tensor
-
-    # visualize example images
-
+    
     # define model
-    model = Model(img_ch=3, output_ch=NUM_CLASSES).to(DEVICE)
+    model = Model(output_ch=NUM_CLASSES).to(DEVICE)
 
     # define optimizer and loss function (don't forget to ignore class index 255)
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
 
-    loss_fn = nn.CrossEntropyLoss(ignore_index=255).to(DEVICE)
+    loss_fn = focal_loss(ignore_index=IGNORE_INDEX).to(DEVICE)
     
     for epoch in range(NUM_EPOCHS):
         model.train()
@@ -149,10 +145,10 @@ def main(args):
         
         if val_jaccard_score > best_jaccard_index:
             best_jaccard_index = val_jaccard_score
-            torch.save(model.state_dict(), 'model.pth')
+            torch.save(model.state_dict(), 'model_1.pth')
             print("Best model saved with Jaccard Index:", best_jaccard_index)
 
-    #wandb.finish()
+    wandb.finish()
     
 if __name__ == "__main__":
     
