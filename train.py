@@ -63,6 +63,20 @@ def validation_step(model, data_loader, loss_fn, device):
         return val_loss, val_jaccard_fn.compute()
 
 def main(args):
+    # start a new wandb run to track this script
+    wandb.init(
+        # set the wandb project where this run will be logged
+        project="final-assignment-cityscapes",
+        
+        # track hyperparameters and run metadata
+        config={
+        "learning_rate": LEARNING_RATE,
+        "architecture": "Attention_Unet_Focal",
+        "dataset": "CityScapes",
+        "epochs": NUM_EPOCHS,
+        }
+    )  
+
     # Transforms
     train_transform = transforms.Compose([
         transforms.Resize([IMAGE_HEIGHT, IMAGE_WIDTH]),
@@ -71,24 +85,31 @@ def main(args):
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
+    
     validation_transform = transforms.Compose([
         transforms.Resize([IMAGE_HEIGHT, IMAGE_WIDTH]),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
+    
     mask_transform = transforms.Compose([
         transforms.Resize((IMAGE_HEIGHT, IMAGE_WIDTH), interpolation=transforms.InterpolationMode.NEAREST),
         transforms.ToTensor()
     ])
 
-    # Data loading
-    full_dataset = Cityscapes(args.data_path, split='train', mode='fine', target_type='semantic', transform=None, target_transform=mask_transform)
+    # Data loading with correct transformations applied
+    full_dataset = Cityscapes(args.data_path, split='train', mode='fine', target_type='semantic', 
+                              transform=train_transform, target_transform=mask_transform)
+    
+    # Splitting dataset into training and validation
     train_size = int(0.8 * len(full_dataset))
     validation_size = len(full_dataset) - train_size
     train_dataset, validation_dataset = random_split(full_dataset, [train_size, validation_size])
+    
+    # Ensuring each subset uses the correct transform
+    train_dataset.dataset.transform = train_transform
+    validation_dataset.dataset.transform = validation_transform
 
-    train_dataset.dataset.transform = train_transform  # Apply training transform to train dataset
-    validation_dataset.dataset.transform = validation_transform  # Apply validation transform to validation dataset
 
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=10)
     validation_loader = DataLoader(validation_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=10)
