@@ -94,7 +94,7 @@ class FocalLoss(nn.Module):
 
 
 def focal_loss(alpha: Optional[Sequence] = None,
-               gamma: float = 1.0,
+               gamma: float = 2.0,
                reduction: str = 'mean',
                ignore_index: int = -100,
                device='cpu',
